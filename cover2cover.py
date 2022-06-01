@@ -4,6 +4,7 @@ import sys
 import xml.etree.ElementTree as ET
 import re
 import os.path
+import subprocess
 
 
 # branch-rate="0.0" complexity="0.0" line-rate="1.0"
@@ -59,18 +60,16 @@ def convert_lines(j_lines, into):
             cline.set('branch', 'false')
 
 
-def guess_filename(path_to_class, source_roots):
-    m = re.match('([^$]*)', path_to_class)
-    guessed_filename = (m.group(1) if m else path_to_class) + '.kt'
+def guess_filename(path_to_class, filename, file_list):
+    guessed_file_path = '/'.join(path_to_class.split("/")[:-1] + [filename])
 
-    cwd = os.getcwd()
+    for file_path in file_list:
+        if guessed_file_path in file_path:
+            return file_path
 
-    for source_root in source_roots:
-        if exists(source_root + guessed_filename):
-            return source_root + guessed_filename
+    print('Could not match file on coverage report: ' + filename, file=sys.stderr)
 
-    os.chdir(cwd)
-    return guessed_filename
+    return guessed_file_path
 
 
 def add_counters(source, target):
@@ -111,10 +110,10 @@ def convert_method(j_method, j_lines):
     return c_method
 
 
-def convert_class(j_class, j_package, source_roots):
+def convert_class(j_class, j_package, file_list):
     c_class = ET.Element('class')
     c_class.set('name', j_class.attrib['name'].replace('/', '.'))
-    c_class.set('filename', guess_filename(j_class.attrib['name'], source_roots))
+    c_class.set('filename', guess_filename(j_class.attrib['name'], j_class.attrib['sourcefilename'], file_list))
 
     all_j_lines = list(find_lines(j_package, c_class.attrib['filename']))
 
@@ -130,13 +129,13 @@ def convert_class(j_class, j_package, source_roots):
     return c_class
 
 
-def convert_package(j_package, source_roots):
+def convert_package(j_package, file_list):
     c_package = ET.Element('package')
     c_package.attrib['name'] = j_package.attrib['name'].replace('/', '.')
 
     c_classes = ET.SubElement(c_package, 'classes')
     for j_class in j_package.findall('class'):
-        c_classes.append(convert_class(j_class, j_package, source_roots))
+        c_classes.append(convert_class(j_class, j_package, file_list))
 
     add_counters(j_package, c_package)
 
@@ -146,13 +145,17 @@ def convert_package(j_package, source_roots):
 def convert_root(source, target, source_roots):
     target.set('timestamp', str(int(source.find('sessioninfo').attrib['start']) / 1000))
 
+    file_list = subprocess.check_output(['find', '.', '-not', '-path',  '*/.*']).decode('UTF-8').split('\n')
+
+    file_list = [file.replace('./', '') for file in file_list]
+
     sources = ET.SubElement(target, 'sources')
     for s in source_roots:
         ET.SubElement(sources, 'source').text = s
 
     packages = ET.SubElement(target, 'packages')
     for package in source.findall('package'):
-        packages.append(convert_package(package, source_roots))
+        packages.append(convert_package(package, file_list))
 
     add_counters(source, target)
 
@@ -172,10 +175,10 @@ def jacoco2cobertura(filename, source_roots):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: cover2cover.py FILENAME [SOURCE_ROOTS]")
+        print("Usage: cover2cover.py FILENAME")
         sys.exit(1)
 
     filename = sys.argv[1]
-    source_roots = sys.argv[2:] if 2 < len(sys.argv) else '.'
-    
+    source_roots = [os.getcwd()]
+
     jacoco2cobertura(filename, source_roots)
